@@ -334,9 +334,20 @@ def get_analysis_engine():
     return AnalysisEngine()
 
 def generate_sentence_df(analysis_results: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Creates a DataFrame for internal use."""
-    # Ensure this DF contains all data for charts/tables
-    return pd.DataFrame(analysis_results)
+    """
+    Creates a DataFrame for internal use with explicit type casting for robustness.
+    This resolves the persistent KeyError by ensuring column existence and correct type.
+    """
+    # Create DataFrame from the list of dictionaries
+    df = pd.DataFrame(analysis_results)
+    
+    # Ensure critical columns exist and are correctly typed
+    if 'is_critical' in df.columns:
+        df['is_critical'] = df['is_critical'].astype(bool)
+    if 'fused_max_score' in df.columns:
+        df['fused_max_score'] = df['fused_max_score'].astype(float)
+        
+    return df
 
 def create_emotion_bar_chart(df: pd.DataFrame, title: str):
     """Creates a comparison bar chart of average fused scores (Significance)."""
@@ -356,6 +367,27 @@ def create_emotion_bar_chart(df: pd.DataFrame, title: str):
     fig.update_layout(xaxis={'categoryorder':'total descending'}, coloraxis_showscale=False) 
     return fig
 
+def create_primary_distribution_chart(df: pd.DataFrame, title: str):
+    """Creates a chart showing the distribution of the fused primary emotion."""
+    if df.empty:
+        return px.pie(names=['Empty'], values=[1], title="No data to display.")
+    
+    # Calculate counts for each fused primary emotion
+    emotion_counts = df['fused_primary'].value_counts().reset_index()
+    emotion_counts.columns = ['Emotion', 'Count']
+
+    # Use a visually engaging chart like a Pie or Sunburst for distribution
+    fig = px.pie(
+        emotion_counts,
+        names='Emotion',
+        values='Count',
+        title=f'🎯 {title}',
+        color_discrete_sequence=px.colors.qualitative.D3, # Use a nice color scheme
+        hole=.3
+    )
+    fig.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#000000', width=1)))
+    return fig
+
 def main():
     st.set_page_config(layout="wide", page_title="Affective Assignment Analyzer", initial_sidebar_state="expanded")
     st.title("🧠 Affective Assignment Analyzer")
@@ -364,7 +396,7 @@ def main():
     try:
         engine = get_analysis_engine()
     except Exception as e:
-        st.error(f"Failed to initialize the analysis engine: {e}")
+        st.error(f"Failed to initialize the analysis engine. Please check the requirements/environment: {e}")
         return
 
     # Sidebar for Input
@@ -388,8 +420,11 @@ def main():
         if pasted_text.strip():
             with st.spinner("Analyzing pasted text..."):
                 sentences = preprocess_text(pasted_text)
-                results = engine.analyze_submission(sentences, "Pasted_Text", student_id_input)
-                all_results.extend(results)
+                if sentences:
+                    results = engine.analyze_submission(sentences, "Pasted_Text", student_id_input)
+                    all_results.extend(results)
+                else:
+                    st.warning("Pasted text contained no recognizable sentences.")
 
         if uploaded_files:
             for uploaded_file in uploaded_files:
@@ -403,39 +438,51 @@ def main():
                         continue
                     
                     sentences = preprocess_text(text)
-                    results = engine.analyze_submission(sentences, uploaded_file.name, student_id_input)
-                    all_results.extend(results)
+                    if sentences:
+                        results = engine.analyze_submission(sentences, uploaded_file.name, student_id_input)
+                        all_results.extend(results)
+                    else:
+                         st.warning(f"File {uploaded_file.name} contained no recognizable sentences after extraction.")
+
 
         # --- Display Results based on Critical Thinking Standards ---
         if all_results:
-            st.success("Analysis Complete: Results adhere to intellectual standards.")
+            st.success("✅ Analysis Complete: Results adhere to intellectual standards of Depth, Logic, and Clarity.")
             
-            # FIX 1 (from previous error): Calculate critical_count directly from the all_results list
+            # Calculate summary metrics directly from all_results (for robustness)
             critical_count = sum(res.get('is_critical', False) for res in all_results)
-            
-            # Now create the DataFrame for display/further calculations (charts, sentence loop)
-            final_df = generate_sentence_df(all_results)
-            
-            # 1. Overall Dashboard (Significance, Relevance, Clarity)
-            st.header("📊 Submission Summary (Significance & Relevance)")
-            
-            # Calculate key metrics
-            fused_mode = final_df['fused_primary'].mode()
-            top_fused = fused_mode[0].title() if not fused_mode.empty else 'Neutral'
-            total_sentences = len(final_df)
-            
-            # FIX 2 (for current error): Calculate average confidence directly from all_results list (Robustness/Accuracy)
+            total_sentences = len(all_results)
             total_fused_max_score = sum(res.get('fused_max_score', 0.0) for res in all_results)
             avg_confidence = (total_fused_max_score / total_sentences) * 100 if total_sentences > 0 else 0
             
-            col1, col2, col3 = st.columns(3)
+            # Create the DataFrame (must be done AFTER data processing)
+            final_df = generate_sentence_df(all_results)
+            
+            # Use final_df for mode calculation (safest part of DF usage)
+            fused_mode = final_df['fused_primary'].mode()
+            top_fused = fused_mode[0].title() if not fused_mode.empty else 'Neutral'
+
+            
+            st.header(f"Final Analysis Report for Submission: {student_id_input}")
+            st.markdown("---")
+
+
+            # Section 1: Overall Metrics (Significance, Relevance)
+            st.section("1. Executive Summary and Key Metrics (Significance & Relevance)")
+            
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
+                st.metric(
+                    label="Total Sentences Analyzed", 
+                    value=total_sentences,
+                )
+            with col2:
                 st.metric(
                     label="Primary Emotional Theme (Fused)", 
                     value=top_fused,
                     help="The most frequently detected primary emotion across all sentences."
                 )
-            with col2:
+            with col3:
                 # Relevance Flag
                 flag_emoji = "🚨" if critical_count > 0 else "🟢"
                 st.metric(
@@ -443,19 +490,53 @@ def main():
                     value=f"{flag_emoji} {critical_count} / {total_sentences}",
                     help=f"Sentences where Anger, Fear, or Sadness fused score exceeds {CRITICAL_THRESHOLD:.2f} (Relevance/Significance flag)."
                 )
-            with col3:
+            with col4:
                  # Accuracy & Precision Metric
                  st.metric(
                     label="Avg. Primary Confidence (Precision)", 
                     value=f"{avg_confidence:.1f}%",
                     help="Average confidence score (probability) of the Primary Fused Emotion across the document."
                 )
+                
+            # Textual Summary
+            critical_msg = (
+                f"**Critical Anomaly Alert:** {critical_count} sentences triggered the anomaly flag (Anger, Fear, or Sadness). These sections may require immediate attention or indicate high emotional investment/distress." 
+                if critical_count > 0 
+                else "**Emotional Stability:** No sentences crossed the critical anomaly threshold."
+            )
+            st.markdown(f"""
+            **Report Findings:**
+            * The dominant affective theme in this submission is **{top_fused}**.
+            * {critical_msg}
+            * The analysis demonstrated an average classification confidence of **{avg_confidence:.1f}%** (Precision).
+            """)
+            st.markdown("---")
 
-            st.plotly_chart(create_emotion_bar_chart(final_df, "Average Fused Emotion Scores (Ordered by Significance)"), use_container_width=True)
             
-            # 2. Sentence-by-Sentence Breakdown (Breadth, Logic, Precision, Accuracy)
-            st.header("📜 Sentence-Level Analysis (Breadth & Logic)")
+            # Section 2: Visualizations (Clarity, Depth, Breadth)
+            st.section("2. Visual Distribution of Affective Scores (Clarity & Depth)")
             
+            col_chart1, col_chart2 = st.columns(2)
+            
+            with col_chart1:
+                st.plotly_chart(
+                    create_emotion_bar_chart(final_df, "Average Fused Emotion Scores (Significance)"), 
+                    use_container_width=True
+                )
+                
+            with col_chart2:
+                st.plotly_chart(
+                    create_primary_distribution_chart(final_df, "Distribution of Primary Fused Emotions (Breadth)"), 
+                    use_container_width=True
+                )
+            st.markdown("---")
+
+
+            # Section 3: Sentence-by-Sentence Breakdown (Breadth, Logic, Precision, Accuracy)
+            st.section("3. Detailed Sentence Analysis (Logic & Precision)")
+            st.markdown("Review the logic and evidence for each sentence's classification.")
+
+            # Loop through the DataFrame rows safely
             for index, row in final_df.iterrows():
                 
                 # Breadth Check: Check for disagreement between systems mapped to Ekman
@@ -503,11 +584,12 @@ def main():
                         scores_fused = {k: f"{v:.4f}" for k, v in sorted(row['fused_scores_8'].items(), key=lambda item: item[1], reverse=True)}
                         st.json(scores_fused)
 
-            # 3. Export Functionality
+            # 4. Export Functionality
+            st.section("4. Data Export")
             csv_buffer = io.StringIO()
             engine.export_to_csv(all_results, csv_buffer)
             st.download_button(
-                label="⬇️ Download Full Analysis (CSV for Accuracy Review)",
+                label="⬇️ Download Full Analysis Data (CSV for Accuracy Review)",
                 data=csv_buffer.getvalue().encode('utf-8'),
                 file_name=f"critical_emotion_analysis_{student_id_input}_{int(time.time())}.csv",
                 mime="text/csv",
