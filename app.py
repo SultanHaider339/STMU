@@ -409,6 +409,11 @@ def main():
         # --- Display Results based on Critical Thinking Standards ---
         if all_results:
             st.success("Analysis Complete: Results adhere to intellectual standards.")
+            
+            # FIX: Calculate critical_count directly from the all_results list (safer than relying on DataFrame column creation)
+            critical_count = sum(res.get('is_critical', False) for res in all_results)
+            
+            # Now create the DataFrame for display/further calculations
             final_df = generate_sentence_df(all_results)
             
             # 1. Overall Dashboard (Significance, Relevance, Clarity)
@@ -417,7 +422,7 @@ def main():
             # Calculate key metrics
             fused_mode = final_df['fused_primary'].mode()
             top_fused = fused_mode[0].title() if not fused_mode.empty else 'Neutral'
-            critical_count = final_df['is_critical'].sum()
+            # critical_count is already calculated correctly
             total_sentences = len(final_df)
             
             col1, col2, col3 = st.columns(3)
