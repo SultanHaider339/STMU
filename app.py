@@ -343,8 +343,10 @@ def generate_sentence_df(analysis_results: List[Dict[str, Any]]) -> pd.DataFrame
     
     # Ensure critical columns exist and are correctly typed
     if 'is_critical' in df.columns:
-        df['is_critical'] = df['is_critical'].astype(bool)
+        # Crucial fix: Cast to boolean to ensure proper comparison later in iteration
+        df['is_critical'] = df['is_critical'].astype(bool) 
     if 'fused_max_score' in df.columns:
+        # Crucial fix: Cast to float to ensure reliable arithmetic
         df['fused_max_score'] = df['fused_max_score'].astype(float)
         
     return df
@@ -468,7 +470,8 @@ def main():
 
 
             # Section 1: Overall Metrics (Significance, Relevance)
-            st.section("1. Executive Summary and Key Metrics (Significance & Relevance)")
+            # FIX: Replaced st.section() with st.subheader()
+            st.subheader("1. Executive Summary and Key Metrics (Significance & Relevance)")
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -514,7 +517,8 @@ def main():
 
             
             # Section 2: Visualizations (Clarity, Depth, Breadth)
-            st.section("2. Visual Distribution of Affective Scores (Clarity & Depth)")
+            # FIX: Replaced st.section() with st.subheader()
+            st.subheader("2. Visual Distribution of Affective Scores (Clarity & Depth)")
             
             col_chart1, col_chart2 = st.columns(2)
             
@@ -533,7 +537,8 @@ def main():
 
 
             # Section 3: Sentence-by-Sentence Breakdown (Breadth, Logic, Precision, Accuracy)
-            st.section("3. Detailed Sentence Analysis (Logic & Precision)")
+            # FIX: Replaced st.section() with st.subheader()
+            st.subheader("3. Detailed Sentence Analysis (Logic & Precision)")
             st.markdown("Review the logic and evidence for each sentence's classification.")
 
             # Loop through the DataFrame rows safely
@@ -547,7 +552,7 @@ def main():
                 # Clarity & Significance for the Expander title
                 title_emoji = "🚨" if row['is_critical'] else ""
                 expander_title = (
-                    f"**{index+1}. {row['fused_primary'].title()}** ({row['fused_max_score']:.2f}) | "
+                    f"**{index+1}. {row['fused_primary'].title()}** ({row['fused_max_score']:.4f}) | "
                     f"{title_emoji} {disagreement_flag} | {row['sentence'][:90]}..."
                 )
                 
@@ -585,7 +590,8 @@ def main():
                         st.json(scores_fused)
 
             # 4. Export Functionality
-            st.section("4. Data Export")
+            # FIX: Replaced st.section() with st.subheader()
+            st.subheader("4. Data Export")
             csv_buffer = io.StringIO()
             engine.export_to_csv(all_results, csv_buffer)
             st.download_button(
