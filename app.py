@@ -410,10 +410,10 @@ def main():
         if all_results:
             st.success("Analysis Complete: Results adhere to intellectual standards.")
             
-            # FIX: Calculate critical_count directly from the all_results list (safer than relying on DataFrame column creation)
+            # FIX 1 (from previous error): Calculate critical_count directly from the all_results list
             critical_count = sum(res.get('is_critical', False) for res in all_results)
             
-            # Now create the DataFrame for display/further calculations
+            # Now create the DataFrame for display/further calculations (charts, sentence loop)
             final_df = generate_sentence_df(all_results)
             
             # 1. Overall Dashboard (Significance, Relevance, Clarity)
@@ -422,8 +422,11 @@ def main():
             # Calculate key metrics
             fused_mode = final_df['fused_primary'].mode()
             top_fused = fused_mode[0].title() if not fused_mode.empty else 'Neutral'
-            # critical_count is already calculated correctly
             total_sentences = len(final_df)
+            
+            # FIX 2 (for current error): Calculate average confidence directly from all_results list (Robustness/Accuracy)
+            total_fused_max_score = sum(res.get('fused_max_score', 0.0) for res in all_results)
+            avg_confidence = (total_fused_max_score / total_sentences) * 100 if total_sentences > 0 else 0
             
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -442,7 +445,6 @@ def main():
                 )
             with col3:
                  # Accuracy & Precision Metric
-                 avg_confidence = final_df['fused_max_score'].mean() * 100
                  st.metric(
                     label="Avg. Primary Confidence (Precision)", 
                     value=f"{avg_confidence:.1f}%",
