@@ -336,17 +336,13 @@ def get_analysis_engine():
 def generate_sentence_df(analysis_results: List[Dict[str, Any]]) -> pd.DataFrame:
     """
     Creates a DataFrame for internal use with explicit type casting for robustness.
-    This resolves the persistent KeyError by ensuring column existence and correct type.
+    This ensures column existence and correct type for all downstream operations.
     """
-    # Create DataFrame from the list of dictionaries
     df = pd.DataFrame(analysis_results)
     
-    # Ensure critical columns exist and are correctly typed
-    if 'is_critical' in df.columns:
-        # Crucial fix: Cast to boolean to ensure proper comparison later in iteration
+    # Check added for robustness against pandas inconsistencies in cloud
+    if not df.empty:
         df['is_critical'] = df['is_critical'].astype(bool) 
-    if 'fused_max_score' in df.columns:
-        # Crucial fix: Cast to float to ensure reliable arithmetic
         df['fused_max_score'] = df['fused_max_score'].astype(float)
         
     return df
@@ -451,14 +447,18 @@ def main():
         if all_results:
             st.success("✅ Analysis Complete: Results adhere to intellectual standards of Depth, Logic, and Clarity.")
             
+            # Create the DataFrame (must be done AFTER data processing)
+            final_df = generate_sentence_df(all_results)
+            
+            # CRITICAL FIX: Convert DataFrame to list of dictionaries for reliable iteration.
+            # This completely bypasses the unstable pandas internal index lookup in row['key'].
+            final_records = final_df.to_dict('records')
+
             # Calculate summary metrics directly from all_results (for robustness)
             critical_count = sum(res.get('is_critical', False) for res in all_results)
             total_sentences = len(all_results)
             total_fused_max_score = sum(res.get('fused_max_score', 0.0) for res in all_results)
             avg_confidence = (total_fused_max_score / total_sentences) * 100 if total_sentences > 0 else 0
-            
-            # Create the DataFrame (must be done AFTER data processing)
-            final_df = generate_sentence_df(all_results)
             
             # Use final_df for mode calculation (safest part of DF usage)
             fused_mode = final_df['fused_primary'].mode()
@@ -470,7 +470,6 @@ def main():
 
 
             # Section 1: Overall Metrics (Significance, Relevance)
-            # FIX: Replaced st.section() with st.subheader()
             st.subheader("1. Executive Summary and Key Metrics (Significance & Relevance)")
             
             col1, col2, col3, col4 = st.columns(4)
@@ -517,7 +516,6 @@ def main():
 
             
             # Section 2: Visualizations (Clarity, Depth, Breadth)
-            # FIX: Replaced st.section() with st.subheader()
             st.subheader("2. Visual Distribution of Affective Scores (Clarity & Depth)")
             
             col_chart1, col_chart2 = st.columns(2)
@@ -537,27 +535,26 @@ def main():
 
 
             # Section 3: Sentence-by-Sentence Breakdown (Breadth, Logic, Precision, Accuracy)
-            # FIX: Replaced st.section() with st.subheader()
             st.subheader("3. Detailed Sentence Analysis (Logic & Precision)")
             st.markdown("Review the logic and evidence for each sentence's classification.")
 
-            # Loop through the DataFrame rows safely
-            for index, row in final_df.iterrows():
+            # Loop through the robust list of dictionaries (final_records)
+            for index, row_dict in enumerate(final_records):
                 
                 # Breadth Check: Check for disagreement between systems mapped to Ekman
-                model_mapped = GO_EMOTIONS_TO_EKMAN.get(row['model_primary'], 'neutral')
-                rule_primary = row['rule_primary']
+                model_mapped = GO_EMOTIONS_TO_EKMAN.get(row_dict['model_primary'], 'neutral')
+                rule_primary = row_dict['rule_primary']
                 disagreement_flag = "❗️ DIVERGENCE" if model_mapped != rule_primary else ""
                 
-                # Clarity & Significance for the Expander title
-                title_emoji = "🚨" if row['is_critical'] else ""
+                # Clarity & Significance for the Expander title (accessing dict keys, not DataFrame row)
+                title_emoji = "🚨" if row_dict['is_critical'] else ""
                 expander_title = (
-                    f"**{index+1}. {row['fused_primary'].title()}** ({row['fused_max_score']:.4f}) | "
-                    f"{title_emoji} {disagreement_flag} | {row['sentence'][:90]}..."
+                    f"**{index+1}. {row_dict['fused_primary'].title()}** ({row_dict['fused_max_score']:.4f}) | "
+                    f"{title_emoji} {disagreement_flag} | {row_dict['sentence'][:90]}..."
                 )
                 
                 with st.expander(expander_title):
-                    st.markdown(f"**Sentence:** *{row['sentence']}*")
+                    st.markdown(f"**Sentence:** *{row_dict['sentence']}*")
                     
                     # Columns for Dual-System Comparison (Breadth)
                     col_m, col_r, col_f = st.columns(3)
@@ -565,32 +562,31 @@ def main():
                     # Model System (Depth/Accuracy)
                     with col_m:
                         st.caption("🔍 **System 1: Transformer Model** (Depth/Accuracy)")
-                        st.markdown(f"**Primary (28-class):** `{row['model_primary'].title()}`")
+                        st.markdown(f"**Primary (28-class):** `{row_dict['model_primary'].title()}`")
                         st.markdown(f"**Mapped Ekman:** `{model_mapped.title()}`")
                         # Display scores (Precision)
-                        scores_model = {k: f"{v:.4f}" for k, v in sorted(row['model_scores_28'].items(), key=lambda item: item[1], reverse=True)[:5]}
+                        scores_model = {k: f"{v:.4f}" for k, v in sorted(row_dict['model_scores_28'].items(), key=lambda item: item[1], reverse=True)[:5]}
                         st.json(scores_model)
 
                     # Rule-Based System (Logic/Explanation)
                     with col_r:
                         st.caption("⚖️ **System 2: Rule-Based Lexicon** (Logic/Explanation)")
                         st.markdown(f"**Primary (8-class):** `{rule_primary.title()}`")
-                        st.markdown(f"**Logic/Evidence:** {row['rule_explanation']}")
+                        st.markdown(f"**Logic/Evidence:** {row_dict['rule_explanation']}")
                         # Display scores (Precision)
-                        scores_rule = {k: f"{v:.4f}" for k, v in sorted(row['rule_scores_8'].items(), key=lambda item: item[1], reverse=True)[:3]}
+                        scores_rule = {k: f"{v:.4f}" for k, v in sorted(row_dict['rule_scores_8'].items(), key=lambda item: item[1], reverse=True)[:3]}
                         st.json(scores_rule)
                     
                     # Fused Result (Clarity/Fairness)
                     with col_f:
                         st.caption("🤝 **Final Fused Score** (Clarity/Fairness)")
-                        st.markdown(f"**Fused Primary:** **`{row['fused_primary'].title()}`**")
-                        st.markdown(f"**Confidence:** **`{row['fused_max_score']:.4f}`**")
+                        st.markdown(f"**Fused Primary:** **`{row_dict['fused_primary'].title()}`**")
+                        st.markdown(f"**Confidence:** **`{row_dict['fused_max_score']:.4f}`**")
                         # Display scores (Precision)
-                        scores_fused = {k: f"{v:.4f}" for k, v in sorted(row['fused_scores_8'].items(), key=lambda item: item[1], reverse=True)}
+                        scores_fused = {k: f"{v:.4f}" for k, v in sorted(row_dict['fused_scores_8'].items(), key=lambda item: item[1], reverse=True)}
                         st.json(scores_fused)
 
             # 4. Export Functionality
-            # FIX: Replaced st.section() with st.subheader()
             st.subheader("4. Data Export")
             csv_buffer = io.StringIO()
             engine.export_to_csv(all_results, csv_buffer)
@@ -612,7 +608,7 @@ def main():
         * **Breadth & Depth:** We use two different systems: a complex 28-class Transformer (AI) and a simpler 8-class Rule-Based (Lexicon). This provides multiple viewpoints.
         * **Logic & Explanation:** The Rule-Based system provides explicit keywords and context (our logic/evidence) for its classification, making the result traceable.
         * **Clarity & Precision:** All final scores are normalized and displayed with four decimal places for exactness.
-        * **Significance & Relevance:** We highlight "Critical Anomaly Sentences" (Anger, Fear, Sadness) to guide teacher attention to the most important areas of student welfare.
+        * **Significance & Relevance:** We highlight "Critical Anomaly Sentences" (Anger, Fear, or Sadness) to guide teacher attention to the most important areas of student welfare.
         """)
 
 if __name__ == "__main__":
