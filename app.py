@@ -6,18 +6,18 @@ import plotly.express as px
 import io
 import time
 import json
-from typing import List, Dict, Any, Union
 import torch
 import pypdf
 import docx
 import re
+from typing import List, Dict, Any, Union
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 
 # --- 0. Configuration and Utilities ---
 
 EKMAN_EMOTIONS = ['anger', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'shame', 'pride']
 
-# Mapping the 28 GoEmotions labels to the 8 Ekman-inspired emotions
+# Mapping the 28 GoEmotions labels to the 8 Ekman-inspired emotions (Depth/Breadth)
 GO_EMOTIONS_TO_EKMAN: Dict[str, str] = {
     'admiration': 'pride', 'amusement': 'joy', 'anger': 'anger', 'annoyance': 'anger',
     'approval': 'pride', 'caring': 'pride', 'confusion': 'surprise', 'curiosity': 'surprise',
@@ -28,7 +28,11 @@ GO_EMOTIONS_TO_EKMAN: Dict[str, str] = {
     'remorse': 'shame', 'sadness': 'sadness', 'surprise': 'surprise', 'neutral': 'neutral',
 }
 
-# In-Script Mock Lexicon (REPLACING the external JSON file)
+# Critical Emotion Threshold (Relevance/Significance)
+CRITICAL_THRESHOLD = 0.35 
+CRITICAL_EMOTIONS = ['anger', 'fear', 'sadness']
+
+# In-Script Mock Lexicon (Rule-Based Logic/Explanation)
 MOCK_EKMAN_LEXICON: Dict[str, Any] = {
     "anger": ["furious", "hate", "enraged", "mad", "frustrat", "irritat", "disgusting", "disapprov"],
     "joy": ["happy", "delight", "wonderful", "great", "excit", "love", "cheer", "optimis"],
@@ -79,11 +83,12 @@ def extract_text_from_file(file_path: Union[str, io.BytesIO], file_type: str) ->
 
 def preprocess_text(text: str) -> List[str]:
     """Tokenizes text into sentences."""
+    # Split text by common sentence-ending punctuation followed by a space
     sentences = re.split(r'(?<=[.?!])\s+', text)
     sentences = [s.strip() for s in sentences if s.strip()]
     return sentences
 
-# --- 2. Rule-Based Ekman Scorer ---
+# --- 2. Rule-Based Ekman Scorer (Logic/Explanation) ---
 
 class EkmanRuleScorer:
     """Implements the rule-based system for 8 Ekman-inspired emotions."""
@@ -95,59 +100,76 @@ class EkmanRuleScorer:
 
     def _score_token(self, word: str, surrounding_words: List[str]) -> Dict[str, float]:
         scores = {e: 0.0 for e in EKMAN_EMOTIONS}
-        
+        triggered_emotions = []
+
         for emotion, keywords in self.emotion_words.items():
+            # Check if the token is an emotional keyword
             if any(word.startswith(k) for k in keywords):
                 score = 1.0
+                triggered_emotions.append(emotion)
                 
+                # Apply Amplifier boost
                 if any(amp in surrounding_words for amp in self.amplifiers):
                     score *= 1.5
                 
+                # Apply Negator reduction/inversion
                 if any(neg in surrounding_words for neg in self.negators):
                     score *= -0.8
                     
                 scores[emotion] += score
                 
-        return scores
+        return scores, triggered_emotions
 
     def score_sentence(self, sentence: str) -> Dict[str, float]:
         words = sentence.lower().split()
         cumulative_scores = {e: 0.0 for e in EKMAN_EMOTIONS}
+        all_triggered_words = set()
         
         for i, word in enumerate(words):
-            context_window = words[max(0, i-3):i] # 3 words before
-            token_scores = self._score_token(word, context_window)
+            # Context window for checking amplifiers/negators (3 words before)
+            context_window = words[max(0, i-3):i]
+            token_scores, triggered_emotions = self._score_token(word, context_window)
+            
+            if triggered_emotions:
+                all_triggered_words.add(word)
             
             for emotion, score in token_scores.items():
                 cumulative_scores[emotion] += score
 
+        # Normalize scores to sum to 1.0 (or 0 if all are zero)
         total_score_magnitude = sum(abs(s) for s in cumulative_scores.values())
         if total_score_magnitude > 0:
-            return {e: max(0.0, abs(s) / total_score_magnitude) for e, s in cumulative_scores.items()}
+            normalized_scores = {e: max(0.0, abs(s) / total_score_magnitude) for e, s in cumulative_scores.items()}
+            # Return normalized scores and the words that triggered them (for Logic/Explanation)
+            return normalized_scores, all_triggered_words
         
-        return {e: 0.0 for e in EKMAN_EMOTIONS}
+        return {e: 0.0 for e in EKMAN_EMOTIONS}, all_triggered_words
 
     def analyze_text(self, sentences: List[str]) -> List[Dict[str, Any]]:
         results = []
-        all_keywords = set(k for k in sum(self.emotion_words.values(), []))
         
         for sent in sentences:
-            sent_scores = self.score_sentence(sent)
-            sorted_scores = sorted(sent_scores.items(), key=lambda item: item[1], reverse=True)
-            primary = sorted_scores[0][0] if sorted_scores and sorted_scores[0][1] > 0 else 'neutral'
+            sent_scores, triggered_words = self.score_sentence(sent)
             
-            triggered_words = [w for w in sent.lower().split() if any(w.startswith(k) for k in all_keywords)]
-            
+            # Find the primary emotion
+            primary = 'neutral'
+            max_score = 0.0
+            if sent_scores:
+                primary, max_score = max(sent_scores.items(), key=lambda item: item[1])
+                if max_score == 0.0:
+                    primary = 'neutral'
+
             results.append({
                 'sentence': sent,
                 'system': 'Rule-Based',
                 'primary_emotion': primary,
                 'scores': sent_scores,
-                'explanation': f"Triggered by: {', '.join(set(triggered_words))}" if triggered_words else 'No explicit emotional cues found.'
+                # Rule Explanation provides Logic and Evidence
+                'explanation': f"Keywords: {', '.join(set(triggered_words))}. Max Score: {max_score:.4f}" if triggered_words else 'No explicit emotional cues found.'
             })
         return results
 
-# --- 3. Transformer Model ---
+# --- 3. Transformer Model (Accuracy/Depth) ---
 
 MODEL_NAME = "SamLowe/roberta-base-go_emotions"
 DEVICE = 0 if torch.cuda.is_available() else -1
@@ -156,30 +178,35 @@ class TransformerEmotionModel:
     """Handles loading and inference for the Hugging Face transformer model."""
     
     def __init__(self):
+        # Cache model loading to optimize performance
+        self.classifier = self._load_model()
+        self.id2label = self.classifier.model.config.id2label if self.classifier else {}
+
+    @st.cache_resource
+    def _load_model(self):
         try:
-            self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-            self.id2label = self.model.config.id2label
+            model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
             
-            self.classifier = pipeline(
+            classifier = pipeline(
                 "text-classification",
-                model=self.model,
-                tokenizer=self.tokenizer,
+                model=model,
+                tokenizer=tokenizer,
                 device=DEVICE,
                 return_all_scores=True,
-                function_to_apply='sigmoid'
+                function_to_apply='sigmoid' # Use sigmoid for multi-label prediction (GoEmotions)
             )
+            return classifier
         except Exception as e:
-            st.error(f"Error loading transformer model. Check internet connection and VRAM. {e}")
-            self.classifier = None
-            self.id2label = {i: str(i) for i in range(28)}
+            st.error(f"Error loading Transformer model. This is critical for Accuracy and Depth. {e}")
+            return None
 
     def batch_analyze(self, sentences: List[str]) -> List[Dict[str, Any]]:
         if not self.classifier or not sentences:
             return [{
-                'sentence': s, 'system': 'Transformer', 'primary_emotion': 'error',
+                'sentence': s, 'system': 'Transformer', 'primary_emotion': 'neutral',
                 'scores': {label: 0.0 for label in self.id2label.values()},
-                'explanation': 'Model not loaded or input empty.'
+                'explanation': 'Model not loaded.'
             } for s in sentences]
             
         raw_predictions = self.classifier(sentences, batch_size=16)
@@ -187,52 +214,53 @@ class TransformerEmotionModel:
         results = []
         for i, pred_list in enumerate(raw_predictions):
             scores = {item['label']: item['score'] for item in pred_list}
+            # Find the primary emotion (highest probability)
             primary_emotion = max(scores, key=scores.get) if scores else 'neutral'
             
             results.append({
                 'sentence': sentences[i], 'system': 'Transformer',
                 'primary_emotion': primary_emotion, 'scores': scores,
-                'explanation': 'Model-based classification.'
+                'explanation': f"Highest probability: {scores.get(primary_emotion, 0.0):.4f}"
             })
             
         return results
 
 
-# --- 4. Analysis Engine and Fusion ---
+# --- 4. Analysis Engine and Fusion (Fairness/Logic) ---
 
 class AnalysisEngine:
     """Integrates both emotion detection systems and performs score fusion."""
     def __init__(self):
-        # Pass the mock lexicon directly to the scorer
         self.rule_scorer = EkmanRuleScorer(MOCK_EKMAN_LEXICON) 
         self.transformer_model = TransformerEmotionModel()
         self.ekman_labels = EKMAN_EMOTIONS
 
     def fuse_scores(self, model_scores: Dict[str, float], rule_scores: Dict[str, float]) -> Dict[str, float]:
-        """Fuses the two score vectors using a 70/30 weighted average."""
+        """Fuses the two score vectors using a 70/30 weighted average (Logic/Fairness)."""
         fused_scores = {e: 0.0 for e in self.ekman_labels}
-        transformer_weight = 0.7
+        transformer_weight = 0.7 # Giving higher weight to the data-driven model (Fairness)
         rule_weight = 0.3
 
-        # Map Transformer scores (28 labels) to 8 Ekman labels
+        # 1. Map Transformer scores (28 labels) to 8 Ekman labels (Depth)
         mapped_model_scores = {e: 0.0 for e in self.ekman_labels}
         for go_label, score in model_scores.items():
             ekman_label = GO_EMOTIONS_TO_EKMAN.get(go_label)
             if ekman_label in mapped_model_scores:
                 mapped_model_scores[ekman_label] += score
 
+        # Re-normalize mapped model scores
         total_mapped = sum(mapped_model_scores.values())
         if total_mapped > 0:
             mapped_model_scores = {k: v / total_mapped for k, v in mapped_model_scores.items()}
         
-        # Weighted Average Fusion
+        # 2. Weighted Average Fusion
         for ekman_label in self.ekman_labels:
             fused_scores[ekman_label] = (
                 mapped_model_scores.get(ekman_label, 0.0) * transformer_weight +
                 rule_scores.get(ekman_label, 0.0) * rule_weight
             )
             
-        # Final normalization
+        # 3. Final normalization (Accuracy)
         total_fused = sum(fused_scores.values())
         if total_fused > 0:
             fused_scores = {k: v / total_fused for k, v in fused_scores.items()}
@@ -249,12 +277,24 @@ class AnalysisEngine:
         
         for m_res, r_res in zip(model_results[:min_len], rule_results[:min_len]):
             fused_scores = self.fuse_scores(m_res['scores'], r_res['scores'])
+            
+            # Identify Fused Primary (Precision)
             primary_fused = max(fused_scores, key=fused_scores.get)
+            fused_max_score = fused_scores.get(primary_fused, 0.0)
+            
+            # Check for critical anomaly (Relevance/Significance)
+            is_critical = False
+            for emotion in CRITICAL_EMOTIONS:
+                 if fused_scores.get(emotion, 0.0) > CRITICAL_THRESHOLD:
+                    is_critical = True
+                    break
 
             final_analysis.append({
                 'student_id': student_id, 'filename': filename, 'sentence': m_res['sentence'],
                 'model_primary': m_res['primary_emotion'], 'rule_primary': r_res['primary_emotion'],
-                'fused_primary': primary_fused, 'model_scores_28': m_res['scores'],
+                'fused_primary': primary_fused, 'fused_max_score': fused_max_score,
+                'is_critical': is_critical,
+                'model_scores_28': m_res['scores'],
                 'rule_scores_8': r_res['scores'], 'fused_scores_8': fused_scores,
                 'model_explanation': m_res['explanation'], 'rule_explanation': r_res['explanation'],
             })
@@ -262,23 +302,31 @@ class AnalysisEngine:
         return final_analysis
 
     def export_to_csv(self, data: List[Dict[str, Any]], path: Any):
-        """Converts the analysis results into a clean DataFrame and exports to CSV stream."""
+        """Converts the analysis results into a clean DataFrame and exports to CSV stream (Accuracy)."""
         records = []
         for item in data:
             record = {
                 'student_id': item['student_id'], 'filename': item['filename'], 'sentence': item['sentence'],
-                'model_primary': item['model_primary'], 'rule_primary': item['rule_primary'],
                 'fused_primary': item['fused_primary'],
+                'fused_max_score': f"{item['fused_max_score']:.4f}",
+                'model_primary': item['model_primary'], 
+                'rule_primary': item['rule_primary'],
+                'is_critical_flag': 'YES' if item['is_critical'] else 'NO',
             }
+            # Add all 8 fused scores
             for emotion, score in item['fused_scores_8'].items():
                 record[f'fused_{emotion}_score'] = f'{score:.4f}'
+            
+            # Add explanations (Logic)
+            record['rule_explanation'] = item['rule_explanation']
+            record['model_explanation'] = item['model_explanation']
             records.append(record)
 
         df = pd.DataFrame(records)
         df.to_csv(path, index=False)
 
 
-# --- 5. Streamlit Application ---
+# --- 5. Streamlit Application (Clarity, Significance, Breadth) ---
 
 @st.cache_resource
 def get_analysis_engine():
@@ -286,23 +334,16 @@ def get_analysis_engine():
     return AnalysisEngine()
 
 def generate_sentence_df(analysis_results: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Creates a DataFrame for sentence-level display."""
-    return pd.DataFrame([
-        {
-            'Sentence': res['sentence'], 'Model Primary': res['model_primary'].title(),
-            'Rule Primary': res['rule_primary'].title(), 'Fused Primary': res['fused_primary'].title(),
-            'Model Scores (28)': res['model_scores_28'], 'Rule Scores (8)': res['rule_scores_8'],
-            'Fused Scores (8)': res['fused_scores_8'], 'Model Explanation': res['model_explanation'],
-            'Rule Explanation': res['rule_explanation'],
-        } for res in analysis_results
-    ])
+    """Creates a DataFrame for internal use."""
+    # Ensure this DF contains all data for charts/tables
+    return pd.DataFrame(analysis_results)
 
 def create_emotion_bar_chart(df: pd.DataFrame, title: str):
-    """Creates a comparison bar chart of average fused scores."""
+    """Creates a comparison bar chart of average fused scores (Significance)."""
     if df.empty:
         return px.bar(title="No data to display.")
         
-    fused_scores_list = [res['Fused Scores (8)'] for res in df.to_dict('records')]
+    fused_scores_list = [res for res in df['fused_scores_8']]
     aggregated_scores = pd.DataFrame(fused_scores_list).mean().reset_index()
     aggregated_scores.columns = ['Emotion', 'Average Score']
     
@@ -311,24 +352,25 @@ def create_emotion_bar_chart(df: pd.DataFrame, title: str):
         title=f'⚖️ {title}', color='Average Score',
         color_continuous_scale=px.colors.sequential.Plasma, height=400
     )
-    fig.update_layout(xaxis={'categoryorder':'total descending'}, coloraxis_showscale=False)
+    # Order by score descending (Significance)
+    fig.update_layout(xaxis={'categoryorder':'total descending'}, coloraxis_showscale=False) 
     return fig
 
-
 def main():
-    st.set_page_config(layout="wide", page_title="Affective Assignment Analyzer")
+    st.set_page_config(layout="wide", page_title="Affective Assignment Analyzer", initial_sidebar_state="expanded")
     st.title("🧠 Affective Assignment Analyzer")
-    st.markdown("Dual-system emotion detection for student submissions using **Transformer** and **Rule-Based Ekman** approaches.")
+    st.subheader("Applying Paul's Standards of Critical Thinking to Emotional Analysis")
 
     try:
         engine = get_analysis_engine()
     except Exception as e:
-        st.error(f"Failed to initialize the analysis engine. Check dependencies. Error: {e}")
+        st.error(f"Failed to initialize the analysis engine: {e}")
         return
 
     # Sidebar for Input
     with st.sidebar:
-        st.header("Upload/Input")
+        st.header("Input & Parameters")
+        st.info("The fusion engine uses 70% Transformer (Depth/Accuracy) and 30% Rule-Based (Logic/Explanation).")
         uploaded_files = st.file_uploader(
             "Upload Assignment Files (PDF, DOCX, TXT)", 
             type=["pdf", "docx", "txt"], 
@@ -337,19 +379,18 @@ def main():
         pasted_text = st.text_area("Or Paste Text Directly Here", height=300)
         student_id_input = st.text_input("Student/Submission ID", value="S001")
         
-        process_button = st.button("🚀 Run Analysis", type="primary")
+        process_button = st.button("🚀 Run Critical Analysis", type="primary")
 
     if process_button:
         all_results = []
         
-        # 1. Process Pasted Text
+        # --- Processing Logic ---
         if pasted_text.strip():
             with st.spinner("Analyzing pasted text..."):
                 sentences = preprocess_text(pasted_text)
                 results = engine.analyze_submission(sentences, "Pasted_Text", student_id_input)
                 all_results.extend(results)
 
-        # 2. Process Uploaded Files
         if uploaded_files:
             for uploaded_file in uploaded_files:
                 file_type = uploaded_file.name.split('.')[-1]
@@ -365,57 +406,118 @@ def main():
                     results = engine.analyze_submission(sentences, uploaded_file.name, student_id_input)
                     all_results.extend(results)
 
-        # 3. Display Results
+        # --- Display Results based on Critical Thinking Standards ---
         if all_results:
-            st.success("Analysis Complete!")
+            st.success("Analysis Complete: Results adhere to intellectual standards.")
             final_df = generate_sentence_df(all_results)
             
-            # Overall Dashboard
-            st.header("📊 Overall Submission Dashboard")
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                primary_mode = final_df['Fused Primary'].mode()
-                st.metric(label="Primary Fused Emotion", value=primary_mode[0] if not primary_mode.empty else 'Neutral')
-            with col2:
-                model_mode = final_df['Model Primary'].mode()
-                st.metric(label="Top Model Emotion (28-class)", value=model_mode[0] if not model_mode.empty else 'Neutral')
-                
-            st.plotly_chart(create_emotion_bar_chart(final_df, "Average Fused Emotion Scores (8 Ekman)"), use_container_width=True)
+            # 1. Overall Dashboard (Significance, Relevance, Clarity)
+            st.header("📊 Submission Summary (Significance & Relevance)")
             
-            # Sentence-by-Sentence Breakdown
-            st.header("📜 Sentence-by-Sentence Breakdown (Interpretability)")
-            for index, row in final_df.iterrows():
-                with st.expander(f"Sentence {index+1}: **{row['Fused Primary']}** | {row['Sentence'][:80]}..."):
-                    st.markdown(f"**Sentence:** *{row['Sentence']}*")
-                    col_m, col_r, col_f = st.columns(3)
-                    with col_m:
-                        st.caption(f"**Transformer Primary:** **{row['Model Primary']}**")
-                        st.json({k: f"{v:.3f}" for k, v in row['Model Scores (28)'].items()})
-                    with col_r:
-                        st.caption(f"**Rule-Based Primary:** **{row['Rule Primary']}**")
-                        st.json({k: f"{v:.3f}" for k, v in row['Rule Scores (8)'].items()})
-                    with col_f:
-                        st.caption(f"**Fused Primary:** **{row['Fused Primary']}**")
-                        st.json({k: f"{v:.3f}" for k, v in row['Fused Scores (8)'].items()})
+            # Calculate key metrics
+            fused_mode = final_df['fused_primary'].mode()
+            top_fused = fused_mode[0].title() if not fused_mode.empty else 'Neutral'
+            critical_count = final_df['is_critical'].sum()
+            total_sentences = len(final_df)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(
+                    label="Primary Emotional Theme (Fused)", 
+                    value=top_fused,
+                    help="The most frequently detected primary emotion across all sentences."
+                )
+            with col2:
+                # Relevance Flag
+                flag_emoji = "🚨" if critical_count > 0 else "🟢"
+                st.metric(
+                    label="Critical Anomaly Sentences", 
+                    value=f"{flag_emoji} {critical_count} / {total_sentences}",
+                    help=f"Sentences where Anger, Fear, or Sadness fused score exceeds {CRITICAL_THRESHOLD:.2f} (Relevance/Significance flag)."
+                )
+            with col3:
+                 # Accuracy & Precision Metric
+                 avg_confidence = final_df['fused_max_score'].mean() * 100
+                 st.metric(
+                    label="Avg. Primary Confidence (Precision)", 
+                    value=f"{avg_confidence:.1f}%",
+                    help="Average confidence score (probability) of the Primary Fused Emotion across the document."
+                )
 
-            # Export Functionality
+            st.plotly_chart(create_emotion_bar_chart(final_df, "Average Fused Emotion Scores (Ordered by Significance)"), use_container_width=True)
+            
+            # 2. Sentence-by-Sentence Breakdown (Breadth, Logic, Precision, Accuracy)
+            st.header("📜 Sentence-Level Analysis (Breadth & Logic)")
+            
+            for index, row in final_df.iterrows():
+                
+                # Breadth Check: Check for disagreement between systems mapped to Ekman
+                model_mapped = GO_EMOTIONS_TO_EKMAN.get(row['model_primary'], 'neutral')
+                rule_primary = row['rule_primary']
+                disagreement_flag = "❗️ DIVERGENCE" if model_mapped != rule_primary else ""
+                
+                # Clarity & Significance for the Expander title
+                title_emoji = "🚨" if row['is_critical'] else ""
+                expander_title = (
+                    f"**{index+1}. {row['fused_primary'].title()}** ({row['fused_max_score']:.2f}) | "
+                    f"{title_emoji} {disagreement_flag} | {row['sentence'][:90]}..."
+                )
+                
+                with st.expander(expander_title):
+                    st.markdown(f"**Sentence:** *{row['sentence']}*")
+                    
+                    # Columns for Dual-System Comparison (Breadth)
+                    col_m, col_r, col_f = st.columns(3)
+                    
+                    # Model System (Depth/Accuracy)
+                    with col_m:
+                        st.caption("🔍 **System 1: Transformer Model** (Depth/Accuracy)")
+                        st.markdown(f"**Primary (28-class):** `{row['model_primary'].title()}`")
+                        st.markdown(f"**Mapped Ekman:** `{model_mapped.title()}`")
+                        # Display scores (Precision)
+                        scores_model = {k: f"{v:.4f}" for k, v in sorted(row['model_scores_28'].items(), key=lambda item: item[1], reverse=True)[:5]}
+                        st.json(scores_model)
+
+                    # Rule-Based System (Logic/Explanation)
+                    with col_r:
+                        st.caption("⚖️ **System 2: Rule-Based Lexicon** (Logic/Explanation)")
+                        st.markdown(f"**Primary (8-class):** `{rule_primary.title()}`")
+                        st.markdown(f"**Logic/Evidence:** {row['rule_explanation']}")
+                        # Display scores (Precision)
+                        scores_rule = {k: f"{v:.4f}" for k, v in sorted(row['rule_scores_8'].items(), key=lambda item: item[1], reverse=True)[:3]}
+                        st.json(scores_rule)
+                    
+                    # Fused Result (Clarity/Fairness)
+                    with col_f:
+                        st.caption("🤝 **Final Fused Score** (Clarity/Fairness)")
+                        st.markdown(f"**Fused Primary:** **`{row['fused_primary'].title()}`**")
+                        st.markdown(f"**Confidence:** **`{row['fused_max_score']:.4f}`**")
+                        # Display scores (Precision)
+                        scores_fused = {k: f"{v:.4f}" for k, v in sorted(row['fused_scores_8'].items(), key=lambda item: item[1], reverse=True)}
+                        st.json(scores_fused)
+
+            # 3. Export Functionality
             csv_buffer = io.StringIO()
             engine.export_to_csv(all_results, csv_buffer)
             st.download_button(
-                label="⬇️ Download Results as CSV",
+                label="⬇️ Download Full Analysis (CSV for Accuracy Review)",
                 data=csv_buffer.getvalue().encode('utf-8'),
-                file_name=f"emotion_analysis_{student_id_input}_{int(time.time())}.csv",
+                file_name=f"critical_emotion_analysis_{student_id_input}_{int(time.time())}.csv",
                 mime="text/csv",
+                help="Exports all primary classifications and the 8 fused scores for external review."
             )
+            
         elif process_button:
-            st.warning("No valid text was entered or extracted from the uploaded files.")
+            st.warning("No valid text was entered or extracted. Please provide text or upload a file.")
             
     if not process_button:
-        st.subheader("Instructions")
+        st.subheader("How This App Applies Critical Thinking Standards")
         st.markdown("""
-        1. Upload files or Paste text in the sidebar.
-        2. Click **Run Analysis** to execute the two parallel systems (Transformer and Rule-Based).
-        3. Review the **Overall Dashboard** and the **Sentence-by-Sentence Breakdown** for interpretability.
+        The analysis process is intentionally dual-layered to meet intellectual standards:
+        * **Breadth & Depth:** We use two different systems: a complex 28-class Transformer (AI) and a simpler 8-class Rule-Based (Lexicon). This provides multiple viewpoints.
+        * **Logic & Explanation:** The Rule-Based system provides explicit keywords and context (our logic/evidence) for its classification, making the result traceable.
+        * **Clarity & Precision:** All final scores are normalized and displayed with four decimal places for exactness.
+        * **Significance & Relevance:** We highlight "Critical Anomaly Sentences" (Anger, Fear, Sadness) to guide teacher attention to the most important areas of student welfare.
         """)
 
 if __name__ == "__main__":
