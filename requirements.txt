@@ -1,10 +1,10 @@
-torch
-transformers
-datasets
-pypdf
-python-docx
 streamlit
 pandas
-openpyxl 
 plotly
-scikit-learn
+torch
+transformers
+pypdf
+python-docx
+wordcloud
+matplotlib
+openpyxl
